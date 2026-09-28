@@ -108,6 +108,9 @@ def process_and_send_diff(result):
         success = send_to_discord(f"```diff\n{current_chunk}\n```")
         if not success:
             all_successful = False
+
+    # Tells the bot we are done sending chunks
+    send_to_discord("[END OF DIFF]")
             
     return all_successful
 

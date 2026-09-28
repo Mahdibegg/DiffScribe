@@ -38,6 +38,9 @@ async def on_ready():
     print(f"Monitoring and formatting channel ID: {TARGET_CHANNEL_ID}")
     print("------")
 
+# Dictionary to buffer multi-part diffs from the webhook
+diff_buffers = {}
+
 @bot.event
 async def on_message(message):
     # 1. Ignore messages sent by the bot itself
@@ -60,16 +63,43 @@ async def on_message(message):
                     
         extracted_text = extracted_text.strip()
 
-        # Only proceed if there is actual text to process
         if extracted_text:
+            author_id = message.author.id
+            
+            # Initialize buffer for this webhook if it doesn't exist
+            if author_id not in diff_buffers:
+                diff_buffers[author_id] = ""
+
+            # DELETE MESSAGE EARLY: Catch 404s so it doesn't crash if already deleted
             try:
-                # Capture timestamp
-                time_ran = datetime.now().strftime("%H:%M")
-                
+                await message.delete()
+            except (discord.NotFound, discord.Forbidden):
+                pass
+
+            # BUFFERING LOGIC
+            if "[END OF DIFF]" not in extracted_text:
+                # Append chunk and STOP. Wait for the next one.
+                diff_buffers[author_id] += f"\n{extracted_text}"
+                return 
+            
+            # End signal received! Clean it and finalize the buffer
+            clean_text = extracted_text.replace("[END OF DIFF]", "").strip()
+            if clean_text:
+                diff_buffers[author_id] += f"\n{clean_text}"
+            
+            # Retrieve the fully assembled diff and instantly clear the buffer
+            full_diff_text = diff_buffers[author_id].strip()
+            diff_buffers[author_id] = ""
+
+            if not full_diff_text:
+                await message.channel.send(f"{message.author.mention} ⚠️ **Diff Processing Error:** Received the end signal, but the buffer was empty.")
+                return
+
+            try:
                 # Determine user mention
                 mapped_mention = message.author.mention
                 for shortcode, discord_username in DISCORD_USER_MAPPINGS.items():
-                    if shortcode in extracted_text:
+                    if shortcode in full_diff_text:
                         if message.guild:
                             found_member = discord.utils.find(
                                 lambda m: m.name.lower() == discord_username.lower() or 
@@ -82,7 +112,7 @@ async def on_message(message):
                                 mapped_mention = f"@{discord_username}"
                         break
 
-                print(f"--- Processing new diff ---\nExtracted {len(extracted_text)} characters.")
+                print(f"--- Processing new diff ---\nExtracted {len(full_diff_text)} characters.")
 
                 async with message.channel.typing():
                     # Call API with higher max_tokens to prevent cut-offs
@@ -92,16 +122,25 @@ async def on_message(message):
                             {
                                 "role": "system",
                                 "content": (
-                                    "You are an expert developer assistant. Analyze the provided git diff and output a JSON object. "
-                                    "The JSON object must contain exactly these three keys:\n"
-                                    "\"lines\": The lines added and removed (e.g., '+15/-3').\n"
-                                    "\"commit\": The commit message. Escape any quotes inside this string.\n"
-                                    "\"summary\": A concise explanation of the changes. Escape any quotes."
+                                    "You are an expert developer assistant. Analyze the provided git diff (which includes metadata at the top) and output a valid JSON object. "
+                                    "The JSON object must contain exactly these three keys:\n\n"
+                                    "\"lines\": The exact count of lines added and removed (e.g., '+15/-3').\n\n"
+                                    "\"commit\": The commit message formatted with literal '\\n' characters for line breaks. You MUST adhere strictly to these rules:\n"
+                                    "1. Find 'Shortcode: ' in the metadata and extract the exact value. Start your message with this value wrapped in brackets (e.g., [mb1425]). Do NOT output empty brackets [ ].\n"
+                                    "2. Write the subject and ALL bullet points in the imperative, present-tense command form (e.g., 'Add error handling' NOT 'Added error handling').\n"
+                                    "3. ABSOLUTELY NO full stops (periods) at the end of the subject line or any of the bullet points.\n\n"
+                                    "Format EXACTLY like this:\n"
+                                    "[extracted_shortcode] type(scope): imperative command subject\\n\\n"
+                                    "- imperative description of change 1 without a full stop\\n"
+                                    "- imperative description of change 2 without a full stop\\n\\n"
+                                    "<Optional: A short paragraph explaining the 'WHY' if the change is complex>\\n\n"
+                                    "Ensure <type> is accurately categorized (feat, fix, chore, refactor, docs).\n\n"
+                                    "\"summary\": A natural, conversational explanation of the changes. Make it sound like a human wrote it. Escape internal quotes."
                                 )
                             },
                             {
                                 "role": "user",
-                                "content": f"Here is the code change:\n\n{extracted_text}\n\nPlease provide the JSON response:"
+                                "content": f"Here is the code change:\n\n{full_diff_text}\n\nPlease provide the JSON response:"
                             }
                         ],
                         temperature=0.2,
@@ -148,6 +187,9 @@ async def on_message(message):
                         if not lines_match and not commit_match and not summary_match:
                             summary_text = f"**Raw AI Output (Failed to parse):**\n{raw_response[:1000]}"
 
+                    # Convert literal '\n' characters back into actual newlines
+                    commit_msg = commit_msg.replace('\\n', '\n')
+
                     # Create the Discord Embed
                     embed = discord.Embed(color=discord.Color.blue())
                     
@@ -157,17 +199,14 @@ async def on_message(message):
 
                     # Construct header and footer
                     header_text = f"**User:** {mapped_mention}"
-                    footer_separator = "------------------------------------------------------------------------------------"
+                    footer_separator = " " \
+                    "------------------------------------------------------------------------------------" \
+                    " "
 
                     # Send
                     await message.channel.send(content=header_text, embed=embed)
                     await message.channel.send(content=footer_separator)
 
-                # Delete the original message containing the diff
-                await message.delete()
-
-            except discord.Forbidden:
-                print("Error: Bot lacks 'Manage Messages' permission to delete messages.")
             except Exception as e:
                 print(f"An error occurred: {e}")
 
