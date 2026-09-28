@@ -4,6 +4,9 @@
 # Personal config file
 config.yaml
 
+# Python cache
+__pycache__/
+
 # Prerequisites
 *.d
 

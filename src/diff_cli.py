@@ -1,0 +1,128 @@
+import requests
+import subprocess
+import time
+import sys
+from config_loader import load_config
+
+# Load configuration and populate variables
+config = load_config()
+
+WEBHOOK_URL = config.get("discord", {}).get("webhook_url", "")
+MAX_LENGTH = config.get("cli", {}).get("max_chunk_length", 1980)
+DELAY_SECONDS = config.get("cli", {}).get("delay_seconds", 1)
+
+USER_MAPPINGS = {}
+DISCORD_USER_MAPPINGS = {}
+
+# Build the mapping dictionaries from the YAML users block
+for key, user_data in config.get("users", {}).items():
+    shortcode = user_data["shortcode"]
+    discord_username = user_data["discord_username"]
+    
+    DISCORD_USER_MAPPINGS[shortcode] = discord_username
+    
+    for email in user_data.get("git_emails", []):
+        USER_MAPPINGS[email] = shortcode
+
+COLOR_GREEN = "\033[92m"
+COLOR_RED = "\033[91m"
+COLOR_RESET = "\033[0m"
+
+# Retrieves the user's git email to be used as a credential for mapping.
+def get_git_user_email():
+    """Executes git config user.email to identify the user from their local environment."""
+    try:
+        process = subprocess.run(
+            ["git", "config", "user.email"], 
+            capture_output=True, 
+            text=True
+        )
+        if process.returncode == 0:
+            return process.stdout.strip()
+        return "Unknown Email"
+    except FileNotFoundError:
+        return "Unknown Email"
+
+# Removes empty lines and empty addition/deletion lines from the diff output.
+def clean_diff_output(diff_text):
+    """Processes the diff text to remove empty lines and lines containing only a plus or minus sign."""
+    cleaned_lines = []
+    for line in diff_text.splitlines():
+        stripped = line.strip()
+        if stripped not in ("", "+", "-"):
+            cleaned_lines.append(line)
+    return "\n".join(cleaned_lines)
+
+# Retrieves the output of the git diff command for the current directory.
+def get_git_diff():
+    """Executes the git diff subprocess and returns the output string, returning None if it is not a git repository."""
+    try:
+        process = subprocess.run(
+            ["git", "diff"], 
+            capture_output=True, 
+            text=True
+        )
+        if process.returncode != 0:
+            return None
+        return process.stdout
+    except FileNotFoundError:
+        return None
+
+# Transmits a provided text payload to the Discord channel.
+def send_to_discord(content):
+    """Sends an HTTP POST request containing the message content to the Discord webhook URL."""
+    message_data = {"content": content}
+    response = requests.post(WEBHOOK_URL, json=message_data)
+    return response.status_code == 204
+
+# Chunks and formats the diff string, adds metadata, and sends to Discord.
+def process_and_send_diff(result):
+    """Prepares metadata, cleans the diff, splits it into chunks, and sends each part to Discord."""
+    if result is None:
+        return send_to_discord("Not a git directory")
+        
+    if result.strip() == "":
+        return send_to_discord("No uncommitted changes in the current git directory.")
+
+    user_email = get_git_user_email()
+    shortcode = USER_MAPPINGS.get(user_email, "UNKNOWN_USER")
+    discord_user = DISCORD_USER_MAPPINGS.get(shortcode, "UNKNOWN_USER")
+    
+    cleaned_result = clean_diff_output(result)
+    lines = cleaned_result.splitlines()
+    
+    current_chunk = f"Email: {user_email} | Shortcode: {shortcode} | Discord User: {discord_user}\n"
+    all_successful = True
+
+    for line in lines:
+        if len(current_chunk) + len(line) + 1 > MAX_LENGTH:
+            success = send_to_discord(f"```diff\n{current_chunk}\n```")
+            if not success:
+                all_successful = False
+            current_chunk = line + "\n"
+            time.sleep(DELAY_SECONDS)
+        else:
+            current_chunk += line + "\n"
+
+    if current_chunk.strip():
+        success = send_to_discord(f"```diff\n{current_chunk}\n```")
+        if not success:
+            all_successful = False
+            
+    return all_successful
+
+# Orchestrates the script execution and handles cosmetic terminal outputs.
+def main():
+    """Serves as the main entry point to fetch the diff, print cosmetic text, and output colorized results."""
+    print("\nparsing git diff to discord...")
+    
+    result = get_git_diff()
+    success = process_and_send_diff(result)
+    
+    if success:
+        print(f"{COLOR_GREEN}Successfully generated commit message on discord{COLOR_RESET}\n")
+    else:
+        print(f"{COLOR_RED}Failed to send message to discord{COLOR_RESET}\n")
+
+if __name__ == "__main__":
+    main()
