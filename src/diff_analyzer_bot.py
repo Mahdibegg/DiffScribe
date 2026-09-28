@@ -6,15 +6,22 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 from groq import AsyncGroq
+from config_loader import load_config
 
 # Load environment variables
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# Fill in desired config values
-TARGET_CHANNEL_ID = None
+# Load YAML Config
+config = load_config()
+TARGET_CHANNEL_ID = config.get("discord", {}).get("target_channel_id")
+
 DISCORD_USER_MAPPINGS = {}
+for key, user_data in config.get("users", {}).items():
+    shortcode = user_data["shortcode"]
+    discord_username = user_data["discord_username"]
+    DISCORD_USER_MAPPINGS[shortcode] = discord_username
 
 # Initialize Discord Intents & Bot
 intents = discord.Intents.default()
