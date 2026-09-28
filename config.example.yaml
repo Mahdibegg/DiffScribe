@@ -1,0 +1,25 @@
+# Discord Settings
+discord:
+  webhook_url: "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN"
+  target_channel_id: 123456789012345678
+
+# Local CLI Settings
+cli:
+  max_chunk_length: 1980
+  delay_seconds: 1
+
+# User Identity Mappings
+# The primary key is the user's shortcode
+# It maps to one Discord username and a list of all their known Git emails
+users:
+  g4m3r_1:
+    shortcode: "g4m3r_1"
+    discord_username: "ShadowNinja99"
+    git_emails:
+      - "shadowninja99@esports.net"
+      - "ninja_alt@gamer.com"
+  pwn3r_2:
+    shortcode: "pwn3r_2"
+    discord_username: "xX_Headshot_Xx"
+    git_emails:
+      - "xx_headshot_xx@competitive.org"

@@ -1,0 +1,8 @@
+# For the local CLI tool (diff_cli.py)
+requests
+PyYAML
+
+# For the server-side Discord bot (discord_bot.py)
+discord.py
+python-dotenv
+groq
